@@ -108,4 +108,77 @@ const createTransaction = async (req, res) => {
     })
 }
 
-module.exports = { createTransaction }
+
+
+const createInitialFundTransaction = async (req, res) => {
+    
+    const { toAccount, amount, idempotencyKey} = req.body
+
+    if(!toAccount.trim() || !amount || !idempotencyKey.trim()){
+        return res.status(401).json({
+            message: "All fieds are required to create transaction"
+        })
+    }
+
+    const toUserAccount = await accountModel.findOne({ _id: toAccount})
+    // console.log("Toaccount : ", toUserAccount)
+
+    if(!toUserAccount){
+        return res.status(401).json({
+            message: "Invalid toAccount"
+        })
+    }
+
+    console.log(req.user)
+    const fromUserAccount = await accountModel.findOne({
+        user: req.user._id
+    })
+
+    console.log("> ",fromUserAccount)
+
+    if(!fromUserAccount){
+        return res.status(400).json({
+            message: "System user account not found"
+        })
+    }
+
+    const session = await mongoose.startSession();
+    session.startTransaction()
+
+    const transaction = new transactionModel({
+        fromAccount: fromUserAccount._id,
+        toAccount,
+        amount,
+        idempotencyKey,
+        status: "PENDING",
+    })
+
+    const debitLedgerEntry = await ledgerModel.create([ {
+        account: fromUserAccount._id,
+        amount,
+        type: "DEBIT",
+        transaction: transaction._id
+    }] , { session })
+    
+    const creditLedgerEntry = await ledgerModel.create([ {
+        account: toAccount,
+        amount,
+        type: "CREDIT",
+        transaction: transaction._id
+    }] , { session })
+
+    transaction.status = "COMPLETED"
+    await transaction.save({ session })
+
+    await session.commitTransaction()
+    session.endSession()
+
+    return res.status(201).json({
+        message: "Initial funds transaction completed successfully",
+        data: transaction
+    })
+}
+module.exports = { 
+    createTransaction,
+    createInitialFundTransaction
+}
